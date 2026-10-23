@@ -125,8 +125,15 @@ jobs:
             cp "$f" "latest/${ticker}_${TODAY}.png"
             tickers="$tickers $ticker"
           done
+          # JSON de cada tarjeta (dashboard nativo): mismo nombre que su PNG
+          for f in "$GITHUB_WORKSPACE"/cards/*.json; do
+            base=$(basename "$f" .json)
+            ticker=$(echo "$base" | cut -d'_' -f1)
+            cp "$f" "latest/${ticker}_${TODAY}.json"
+          done
           for ticker in $(echo "$tickers" | tr ' ' '\n' | sort -u); do
             ls -1 "latest/${ticker}"_*.png 2>/dev/null | sort -r | tail -n +5 | xargs -r rm -f
+            ls -1 "latest/${ticker}"_*.json 2>/dev/null | sort -r | tail -n +5 | xargs -r rm -f
           done
           git add -A
           git commit --quiet -m "actualizar tarjetas $(date -u +%FT%TZ)" --allow-empty

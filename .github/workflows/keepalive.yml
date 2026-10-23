@@ -1,0 +1,30 @@
+name: keepalive
+
+# GitHub desactiva los workflows con `schedule` de un repo PUBLICO tras 60
+# dias sin actividad. Este latido semanal deja un commit vacio en una rama
+# aparte para que eso nunca pase. (cron-job.org dispara los workflows
+# principales por repository_dispatch, que no se ve afectado, pero los
+# respaldos nativos si dependen de esto.)
+
+on:
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  beat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: latido
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan keepalive
+          git rm -rf --quiet . 2>/dev/null || true
+          git commit --allow-empty --quiet -m "latido $(date -u +%FT%TZ)"
+          git push --quiet --force origin keepalive

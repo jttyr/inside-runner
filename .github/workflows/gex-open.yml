@@ -20,6 +20,10 @@ on:
         required: false
         default: "false"
 
+concurrency:
+  group: data-gex-terminal
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest

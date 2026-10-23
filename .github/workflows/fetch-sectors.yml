@@ -19,6 +19,10 @@ on:
   schedule:
     - cron: "0 */2 * * *"   # respaldo suelto, por si cron-job.org fallara
 
+concurrency:
+  group: data-macro-indicators
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest

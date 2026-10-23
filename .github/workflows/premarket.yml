@@ -85,7 +85,7 @@ jobs:
         env:
           MD_DISCORD_WEBHOOK: ${{ secrets.MD_DISCORD_WEBHOOK }}
         run: |
-          if [ "${{ inputs.dry }}" = "true" ]; then
+          if [ "${{ inputs.dry }}" = "true" ] || [ -z "$MD_DISCORD_WEBHOOK" ]; then
             python premarket_discord.py --dry
           else
             python premarket_discord.py --una-vez
@@ -157,5 +157,6 @@ jobs:
           if [ -n "$(git status --porcelain)" ]; then
             git add -A
             git commit --quiet -m "actualizar imagenes publicas $(date -u +%FT%TZ)"
+            git pull --rebase --quiet origin main || true
             git push --quiet origin main
           fi

@@ -90,7 +90,7 @@ jobs:
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
           S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
           S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
-          DRY_RUN: ${{ github.event.inputs.dry || 'false' }}
+          DRY_RUN: ${{ github.event.inputs.dry || (secrets.DISCORD_WEBHOOK_INDEX == '' && 'true' || 'false') }}
         run: python run_gex.py --pin
 
       # Esto deja UNA clave fija por activo (latest/SPY.png) en una rama aparte -- el
@@ -156,5 +156,6 @@ jobs:
           if [ -n "$(git status --porcelain)" ]; then
             git add -A
             git commit --quiet -m "actualizar imagenes publicas $(date -u +%FT%TZ)"
+            git pull --rebase --quiet origin main || true
             git push --quiet origin main
           fi

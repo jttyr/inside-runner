@@ -138,5 +138,6 @@ jobs:
           if [ -n "$(git status --porcelain)" ]; then
             git add -A
             git commit --quiet -m "actualizar imagenes publicas (etapa 2) $(date -u +%FT%TZ)"
+            git pull --rebase --quiet origin main || true
             git push --quiet origin main
           fi

@@ -1,0 +1,191 @@
+name: GEX Intradía (cada 15 min)
+
+# Grupo GEX: corre cada 15 min entre las 06:00 y las 14:00 MX, o sea desde
+# el premarket hasta el cierre del mercado estadounidense.
+#
+# Durante la jornada se ACTUALIZA el mismo mensaje de Discord en vez de
+# publicar uno nuevo, así que el cache tiene que sobrevivir entre corridas:
+# ahí vive el id del mensaje vivo de cada canal.
+#
+# La primera corrida del día calcula el snapshot de gamma y lo deja en
+# cache; las siguientes lo reutilizan y solo refrescan el precio. No hace
+# falta una corrida diaria aparte para sembrarlo -- y tenerla dentro de
+# esta ventana publicaría una imagen de más y movería las barras a media
+# sesión, que es justo lo que el cache evita.
+
+on:
+  repository_dispatch:
+    types: [run-gex-intraday]
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "No publicar a Discord (solo generar PNGs)"
+        required: false
+        default: "false"
+      force:
+        description: "Publicar aunque esté fuera de la ventana horaria"
+        required: false
+        default: "false"
+      as_of:
+        description: "Previsualizar una hora pasada (HH:MM, mercado cerrado no bloquea) -- no publica"
+        required: false
+        default: ""
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # La ventana aplica a TODOS los disparos, no solo al del cron: un
+      # disparo manual publicando a deshoras mandaría contexto de una sesión
+      # que no corresponde. La única excepción es el modo seco, que no
+      # publica nada y sirve para revisar el resultado cuando sea.
+      - name: Ventana horaria (14:00-20:00 UTC = 08:00-14:00 MX)
+        id: window
+        run: |
+          if [ "${{ github.event.inputs.dry }}" = "true" ]; then
+            echo "Modo seco: se permite fuera de ventana (no publica)."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            echo "Forzado a mano: se publica fuera de ventana."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Con el mercado cerrado el precio no se mueve y el open interest es
+          # el del viernes: la imagen saldría idéntica a la última, pero
+          # fechada hoy, que es peor que no publicarla. El cron ya restringe a
+          # lunes-viernes; la guarda lo repite porque no se apoya en que el
+          # programador externo esté bien configurado.
+          dow=$(date -u +%u)
+          if [ "$dow" -gt 5 ]; then
+            echo "Fin de semana (día $dow), se omite esta corrida."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          hour=$(date -u +%H)
+          if [ "$hour" -lt 14 ] || [ "$hour" -ge 20 ]; then
+            echo "Fuera de ventana horaria ($hour UTC), se omite esta corrida."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: jttyr/gex-terminal
+          token: ${{ secrets.RUNNER_TOKEN }}
+        if: steps.window.outputs.proceed == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.window.outputs.proceed == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        if: steps.window.outputs.proceed == 'true'
+        run: pip install -r requirements.txt
+
+      # La clave lleva el run_id para que cada corrida guarde su propia
+      # entrada, y restore-keys recupera la más reciente: así el snapshot
+      # que calculó la primera corrida del día llega a las siguientes.
+      - name: Recuperar snapshot del día
+        if: steps.window.outputs.proceed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: cache
+          key: gex-snapshot-${{ github.run_id }}
+          restore-keys: gex-snapshot-
+
+      - name: Generar y publicar imagen
+        if: steps.window.outputs.proceed == 'true'
+        env:
+          DISCORD_WEBHOOK_INDEX: ${{ secrets.DISCORD_WEBHOOK_INDEX }}
+          DISCORD_WEBHOOK_COMM: ${{ secrets.DISCORD_WEBHOOK_COMM }}
+          DISCORD_WEBHOOK_YIELDS: ${{ secrets.DISCORD_WEBHOOK_YIELDS }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
+          S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
+          DRY_RUN: ${{ github.event.inputs.dry || 'false' }}
+          AS_OF: ${{ github.event.inputs.as_of }}
+        run: python run_gex.py ${AS_OF:+--as-of "$AS_OF"}
+
+      # Esto deja UNA clave
+      # fija por activo (latest/QQQ.png) en una rama aparte -- el dashboard
+      # web solo pide ese archivo, sin buscar nada. No toca `main` ni el
+      # flujo de Discord/S3 de arriba: corre despues y no lo afecta.
+      - name: Publicar ultimas imagenes en rama data
+        if: always() && steps.window.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+        run: |
+          set -e
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/jttyr/gex-terminal.git"
+          rm -rf /tmp/data-branch
+          if git clone --quiet --branch data --single-branch "$REPO_URL" /tmp/data-branch 2>/dev/null; then
+            cd /tmp/data-branch
+          else
+            mkdir -p /tmp/data-branch && cd /tmp/data-branch
+            git init --quiet
+            git remote add origin "$REPO_URL"
+            git checkout --quiet --orphan data
+          fi
+          mkdir -p latest
+          shopt -s nullglob
+          TODAY=$(TZ=America/Mexico_City date +%F)
+          tickers=""
+          for f in "$GITHUB_WORKSPACE"/output/*.png; do
+            base=$(basename "$f" .png)
+            ticker=$(echo "$base" | cut -d'_' -f2)
+            cp "$f" "latest/${ticker}_${TODAY}.png"
+            tickers="$tickers $ticker"
+          done
+          # JSON del grafico nativo (ES/NQ, ver gex_export.py): mismo nombre
+          # de archivo que su PNG hermano, misma poda a 4 dias, mismo commit.
+          for f in "$GITHUB_WORKSPACE"/output/*.json; do
+            base=$(basename "$f" .json)
+            ticker=$(echo "$base" | cut -d'_' -f2)
+            cp "$f" "latest/${ticker}_${TODAY}.json"
+          done
+          for ticker in $(echo "$tickers" | tr ' ' '\n' | sort -u); do
+            ls -1 "latest/${ticker}"_*.png 2>/dev/null | sort -r | tail -n +5 | xargs -r rm -f
+            ls -1 "latest/${ticker}"_*.json 2>/dev/null | sort -r | tail -n +5 | xargs -r rm -f
+          done
+          git add -A
+          git commit --quiet -m "actualizar imagenes $(date -u +%FT%TZ)" --allow-empty
+          git push --quiet origin data --force
+
+      # Copia publica y efimera para un dashboard que no depende de ninguna
+      # Mac encendida: solo imagenes, en un repo PUBLICO aparte que se
+      # vacia solo cada noche (ver inside-terminal-images/.github/workflows
+      # /wipe-daily.yml). Este repo (con el codigo real) sigue privado.
+      - name: Publicar imagenes publicas efimeras (dashboard sin Mac)
+        if: always() && steps.window.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_IMAGES_TOKEN }}
+        run: |
+          set -e
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          rm -rf /tmp/public-images
+          git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/jttyr/inside-terminal-images.git" /tmp/public-images
+          cd /tmp/public-images
+          mkdir -p images
+          shopt -s nullglob
+          for f in "$GITHUB_WORKSPACE"/output/*.png; do
+            base=$(basename "$f" .png)
+            ticker=$(echo "$base" | cut -d'_' -f2)
+            cp "$f" "images/${ticker}.png"
+          done
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit --quiet -m "actualizar imagenes publicas $(date -u +%FT%TZ)"
+            git push --quiet origin main
+          fi

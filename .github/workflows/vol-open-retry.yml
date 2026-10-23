@@ -1,0 +1,66 @@
+name: Volatilidad apertura Retry
+
+# Vigilante de vol-open.yml: revisa cada 15 min si la última corrida falló
+# (ej. GitHub no asignó runner al dispatch) y la relanza, máx. 2 reintentos.
+#
+# Solo vigila la FIJA. La intradía no lo necesita: corre cada quince minutos
+# por su cuenta, así que un fallo suelto lo cura la corrida siguiente sola.
+# La fija, en cambio, tiene un solo disparo al día -- si se pierde, no hay
+# foto de apertura hasta mañana.
+#
+# Usa `schedule` nativo, que aquí sí corresponde: es un vigilante, no el
+# disparo principal, y da igual que se retrase unos minutos.
+#
+# La ventana va pegada a la de vol-open.yml (13:00-14:59 UTC). Vigilar antes
+# no sirve: fuera de su ventana la corrida se salta y termina en éxito, así
+# que el vigilante solo gastaría intentos mirando algo que no tenía que haber
+# ocurrido.
+on:
+  schedule:
+    - cron: "*/15 13-14 * * 1-5"
+  workflow_dispatch:
+
+# El GITHUB_TOKEN por defecto solo trae lectura de contenidos, así que
+# consultar el historial de corridas devuelve 403. Necesita actions:write
+# para leer el historial y relanzar.
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reintentar vol-open.yml si la última corrida falló
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflowFile = 'vol-open.yml';
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowFile,
+              per_page: 5,
+            });
+            const recent = data.workflow_runs;
+            if (recent.length === 0) {
+              console.log('Sin corridas previas.');
+              return;
+            }
+            if (recent[0].conclusion !== 'failure') {
+              console.log('Última corrida OK, no se reintenta.');
+              return;
+            }
+            const idx = recent.findIndex(r => r.conclusion !== 'failure');
+            const fallos = idx === -1 ? recent.length : idx;
+            if (fallos > 2) {
+              console.log(`Máximo de reintentos alcanzado (${fallos}).`);
+              return;
+            }
+            console.log(`Reintentando (fallo consecutivo #${fallos})...`);
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowFile,
+              ref: 'main',
+            });

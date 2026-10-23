@@ -1,0 +1,59 @@
+name: GEX Intradía Retry
+
+# Vigilante: revisa cada 15 min si la última corrida de gex-intraday.yml falló
+# (ej. GitHub no asignó runner al dispatch) y la relanza, máx. 2 reintentos.
+# Usa `schedule` nativo (aquí sí es correcto, es solo un watchdog, no el
+# disparo principal) — mismo patrón que premarket-retry.yml.
+# La ventana va pegada a la de gex-intraday.yml (14:00-20:00 UTC). Vigilar
+# antes no servía: fuera de su ventana la corrida se salta y termina en
+# éxito, así que el vigilante solo gastaba intentos mirando una corrida que
+# ni siquiera tenía que haber ocurrido.
+on:
+  schedule:
+    - cron: "*/15 14-19 * * 1-5"
+  workflow_dispatch:
+
+# El GITHUB_TOKEN por defecto solo trae lectura de contenidos, así que
+# consultar el historial de corridas devolvía 403 y el vigilante moría en su
+# primera llamada. Necesita actions:write para leer el historial y relanzar.
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reintentar gex-intraday.yml si la última corrida falló
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflowFile = 'gex-intraday.yml';
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowFile,
+              per_page: 5,
+            });
+            const recent = data.workflow_runs;
+            if (recent.length === 0) {
+              console.log('Sin corridas previas.');
+              return;
+            }
+            if (recent[0].conclusion !== 'failure') {
+              console.log('Última corrida OK, no se reintenta.');
+              return;
+            }
+            const consecutiveFailures = recent.findIndex(r => r.conclusion !== 'failure');
+            const failureCount = consecutiveFailures === -1 ? recent.length : consecutiveFailures;
+            if (failureCount > 2) {
+              console.log(`Ya se alcanzó el máximo de reintentos (${failureCount}), no se reintenta más.`);
+              return;
+            }
+            console.log(`Reintentando (fallo consecutivo #${failureCount})...`);
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowFile,
+              ref: 'main',
+            });

@@ -1,0 +1,50 @@
+name: reset-marcador-duplicado
+
+# Reinicia el marcador anti-duplicados (.ultimo_envio_discord) cada dia a las
+# 00:00 MX (06:00 UTC), borrando sus caches 'enviado-*'. Asi cada dia empieza
+# con la cuenta de envios en CERO: una prueba (aunque sea de noche) no deja el
+# guard bloqueado para la entrega de la manana siguiente.
+#
+# De paso barre 'estado-fases-*' (memoria de fases de premarket.yml y
+# market-open-update.yml): la clave lleva el run_id, asi que cada corrida
+# deja una entrada nueva sin borrar la anterior. Sin este reset se acumulan
+# sin limite (asi se llego una vez al tope de almacenamiento de Actions de
+# la cuenta) -- solo la mas reciente hace falta, y esa la vuelve a crear la
+# primera corrida despues del reset.
+#
+# Aqui SI se usa el `schedule` nativo de GitHub (a diferencia de premarket.yml):
+# la hora exacta del reset no importa, solo que ocurra alguna vez pasada la
+# medianoche. El retraso tipico del scheduler es inofensivo para un reset.
+on:
+  schedule:
+    - cron: "0 6 * * *"     # 06:00 UTC = 00:00 MX (Mexico no tiene horario de verano)
+  workflow_dispatch:          # tambien se puede reiniciar a mano cuando quieras
+
+permissions:
+  actions: write              # necesario para borrar caches
+
+concurrency:
+  group: reset-marcador
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: borrar caches viejos (marcador + memoria de fases)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          ids=$(gh api "repos/$REPO/actions/caches" --paginate \
+                  --jq '.actions_caches[] | select(.key|startswith("enviado-") or startswith("estado-fases-")) | .id')
+          if [ -z "$ids" ]; then
+            echo "No hay caches 'enviado-*' ni 'estado-fases-*' que borrar. Ya limpio."
+            exit 0
+          fi
+          for id in $ids; do
+            gh api -X DELETE "repos/$REPO/actions/caches/$id" \
+              && echo "Borrado cache id $id" \
+              || echo "No se pudo borrar cache id $id"
+          done

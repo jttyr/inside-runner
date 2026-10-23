@@ -1,0 +1,142 @@
+name: market-open-update
+
+# ETAPA 2: re-corre el modelo a las 9:30 NY (la apertura) y confirma o corrige
+# la tesis de la Etapa 1 (premarket, 8:30 NY). NO publica a Discord -- solo
+# refresca la tarjeta (cards/<TICKER>_<fecha>_update.png) que alimenta el
+# dashboard, para que "latest" sea siempre lo mas reciente del dia, no lo de
+# 3 horas antes del open.
+#
+# A diferencia de premarket.yml (que usa cron-job.org porque una corrida de
+# mas ahi es un mensaje DUPLICADO en Discord), aqui SI se usa el `schedule`
+# nativo de GitHub: el peor caso de su retraso/rafaga es sobreescribir
+# "latest" una vez de mas, que es inofensivo (no publica nada a nadie). No
+# hace falta el cron externo -- ese es solo para Discord.
+#
+# 14:00 UTC cae a medio camino entre las 9:30 NY de verano (13:30 UTC, EDT) y
+# de invierno (14:30 UTC, EST) -- hasta 30-60 min de diferencia segun la
+# epoca del anio, aceptable para refrescar el dashboard (no para Discord).
+on:
+  schedule:
+    - cron: "0 14 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "dry-run: genera las tarjetas pero NO publica al dashboard"
+        default: false
+        type: boolean
+
+concurrency:
+  group: market-open-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      # Guarda de dia habil: el cron nativo no sabe de fines de semana en la
+      # zona horaria correcta (corre en UTC). Los disparos manuales no tienen
+      # restriccion.
+      - name: ventana de produccion
+        id: ventana
+        run: |
+          dow=$(date -u +%u)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$dow" -gt 5 ]; then
+            echo "fin de semana (dia ${dow} UTC) -> no se publica"
+            echo "go=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=si" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: jttyr/market-drivers
+          token: ${{ secrets.RUNNER_TOKEN }}
+        if: steps.ventana.outputs.go == 'si'
+
+      - uses: actions/setup-python@v5
+        if: steps.ventana.outputs.go == 'si'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: instalar dependencias
+        if: steps.ventana.outputs.go == 'si'
+        run: pip install -r requirements.txt
+
+      - name: restaurar memoria de fases (estado/)
+        if: steps.ventana.outputs.go == 'si'
+        uses: actions/cache@v4
+        with:
+          path: estado
+          key: estado-fases-${{ github.run_id }}
+          restore-keys: |
+            estado-fases-
+
+      - name: recalcular a las 9:30 NY (Etapa 2)
+        if: steps.ventana.outputs.go == 'si'
+        run: python update_session.py
+
+      # Mismo mecanismo que premarket.yml: sobreescribe latest/<TICKER>_<HOY>.png
+      # en la rama data -- asi el dashboard siempre muestra lo mas reciente del
+      # dia (Etapa 2 en vez de la Etapa 1 de 3 horas antes), sin tocar Discord.
+      - name: publicar ultimas tarjetas en rama data
+        if: always() && steps.ventana.outputs.go == 'si' && inputs.dry != true
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+        run: |
+          set -e
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/jttyr/market-drivers.git"
+          rm -rf /tmp/data-branch
+          if git clone --quiet --branch data --single-branch "$REPO_URL" /tmp/data-branch 2>/dev/null; then
+            cd /tmp/data-branch
+          else
+            mkdir -p /tmp/data-branch && cd /tmp/data-branch
+            git init --quiet
+            git remote add origin "$REPO_URL"
+            git checkout --quiet --orphan data
+          fi
+          mkdir -p latest
+          shopt -s nullglob
+          TODAY=$(TZ=America/Mexico_City date +%F)
+          tickers=""
+          for f in "$GITHUB_WORKSPACE"/cards/*_update.png; do
+            base=$(basename "$f" .png)
+            ticker=$(echo "$base" | cut -d'_' -f1)
+            cp "$f" "latest/${ticker}_${TODAY}.png"
+            tickers="$tickers $ticker"
+          done
+          for ticker in $(echo "$tickers" | tr ' ' '\n' | sort -u); do
+            ls -1 "latest/${ticker}"_*.png 2>/dev/null | sort -r | tail -n +5 | xargs -r rm -f
+          done
+          git add -A
+          git commit --quiet -m "actualizar tarjetas (etapa 2, 9:30 NY) $(date -u +%FT%TZ)" --allow-empty
+          git push --quiet origin data --force
+
+      - name: publicar imagenes publicas efimeras (dashboard sin Mac)
+        if: always() && steps.ventana.outputs.go == 'si' && inputs.dry != true
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_IMAGES_TOKEN }}
+        run: |
+          set -e
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          rm -rf /tmp/public-images
+          git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/jttyr/inside-terminal-images.git" /tmp/public-images
+          cd /tmp/public-images
+          mkdir -p images
+          shopt -s nullglob
+          for f in "$GITHUB_WORKSPACE"/cards/*_update.png; do
+            base=$(basename "$f" .png)
+            ticker=$(echo "$base" | cut -d'_' -f1)
+            cp "$f" "images/${ticker}.png"
+          done
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit --quiet -m "actualizar imagenes publicas (etapa 2) $(date -u +%FT%TZ)"
+            git push --quiet origin main
+          fi

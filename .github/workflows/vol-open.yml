@@ -1,0 +1,93 @@
+name: Volatilidad apertura (fija)
+
+# Primera de las dos publicaciones del día, a las 07:30 MX (13:30 UTC), una
+# hora antes de que abra el mercado estadounidense.
+#
+# El mensaje queda FIJO: dice con qué volatilidad se llega a la sesión, y es
+# la foto contra la que se compara todo lo que pase después. La corrida de
+# cada quince minutos publica el suyo aparte y no lo toca -- si lo editara,
+# quedaría una sola imagen y se perdería justamente la comparación.
+#
+# El disparo viene de cron-job.org vía repository_dispatch. El `schedule`
+# nativo de GitHub se descarta a propósito: dispara en ráfaga y con retraso.
+
+on:
+  repository_dispatch:
+    types: [run-vol-open]
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "No publicar a Discord (solo generar PNGs)"
+        required: false
+        default: "false"
+      force:
+        description: "Publicar aunque esté fuera de la ventana horaria"
+        required: false
+        default: "false"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      # La ventana aplica a TODOS los disparos, no solo al del cron: un
+      # disparo manual publicando a deshoras mandaría la foto de apertura de
+      # una sesión que no corresponde. La única excepción es el modo seco,
+      # que no publica nada y sirve para revisar cuando sea.
+      - name: Ventana horaria (13:00-14:59 UTC = 07:00-08:59 MX)
+        id: window
+        run: |
+          if [ "${{ github.event.inputs.dry }}" = "true" ]; then
+            echo "Modo seco: se permite fuera de ventana (no publica)."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            echo "Forzado a mano: se publica fuera de ventana."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Sin sesión no hay apertura que fotografiar. El cron ya restringe a
+          # lunes-viernes; la guarda lo repite porque no se apoya en que el
+          # programador externo esté bien configurado.
+          dow=$(date -u +%u)
+          if [ "$dow" -gt 5 ]; then
+            echo "Fin de semana (día $dow), se omite esta corrida."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # El cron dispara a las 13:30 UTC, a media hora de cada borde. Sin
+          # holgura, cualquier demora de GitHub caía fuera y la foto de
+          # apertura se perdía en silencio.
+          hour=$(date -u +%H)
+          if [ "$hour" -lt 13 ] || [ "$hour" -ge 15 ]; then
+            echo "Fuera de ventana horaria ($hour UTC), se omite esta corrida."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          repository: jttyr/vol-terminal
+          token: ${{ secrets.RUNNER_TOKEN }}
+        if: steps.window.outputs.proceed == 'true'
+
+      - uses: actions/setup-python@v6
+        if: steps.window.outputs.proceed == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        if: steps.window.outputs.proceed == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Ajustar los modelos y publicar la foto fija
+        if: steps.window.outputs.proceed == 'true'
+        env:
+          DISCORD_WEBHOOK_INDEX: ${{ secrets.DISCORD_WEBHOOK_INDEX }}
+          DISCORD_WEBHOOK_COMM: ${{ secrets.DISCORD_WEBHOOK_COMM }}
+          DISCORD_WEBHOOK_YIELDS: ${{ secrets.DISCORD_WEBHOOK_YIELDS }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DRY_RUN: ${{ github.event.inputs.dry || 'false' }}
+        run: python run_vol.py --pin

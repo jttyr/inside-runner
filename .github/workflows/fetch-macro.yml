@@ -1,0 +1,60 @@
+name: Indicadores Macro EE.UU.
+
+# Genera y publica us-indicators.json (FRED + Yahoo Finance, gratis).
+#
+# NO usa el `schedule` nativo de GitHub como disparador principal (ver
+# fetch-sectors.yml para el porque). El disparador real es cron-job.org ->
+# repository_dispatch, disparando ~06:00, ~08:00 y ~12:00 MX (con unos
+# minutos de margen para que las fuentes ya hayan publicado el dato del
+# dia). `schedule` se deja nada mas como respaldo suelto.
+
+on:
+  repository_dispatch:
+    types: [run-macro]
+  workflow_dispatch:
+  schedule:
+    - cron: "20 12,14,18 * * *"   # respaldo suelto, por si cron-job.org fallara
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: jttyr/macro-indicators
+          token: ${{ secrets.RUNNER_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Generar indicadores
+        run: python fetch.py
+
+      - name: Publicar en rama data
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+        run: |
+          set -e
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/jttyr/macro-indicators.git"
+          rm -rf /tmp/data-branch
+          if git clone --quiet --branch data --single-branch "$REPO_URL" /tmp/data-branch 2>/dev/null; then
+            cd /tmp/data-branch
+          else
+            mkdir -p /tmp/data-branch && cd /tmp/data-branch
+            git init --quiet
+            git remote add origin "$REPO_URL"
+            git checkout --quiet --orphan data
+          fi
+          mkdir -p latest
+          cp "$GITHUB_WORKSPACE/output/us-indicators.json" latest/us-indicators.json
+          git add -A
+          git commit --quiet -m "actualizar indicadores $(date -u +%FT%TZ)" --allow-empty
+          git push --quiet origin data --force

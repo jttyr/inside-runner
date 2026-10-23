@@ -1,0 +1,105 @@
+name: Volatilidad intradía (cada 15 min)
+
+# Segunda publicación del día: corre cada 15 min entre las 07:30 y las 11:30
+# MX (13:30-17:30 UTC) y ACTUALIZA el mismo mensaje en vez de publicar uno
+# nuevo. Sin eso el canal acumularía dieciséis imágenes por activo al día.
+#
+# El id del mensaje vivo de cada canal se guarda en `cache/`, así que ese
+# directorio tiene que sobrevivir entre corridas -- de ahí el paso de caché.
+# Si se pierde, la corrida siguiente abre un mensaje nuevo y sigue editando
+# ése: se duplica una imagen, no se rompe nada.
+#
+# QUÉ CAMBIA ENTRE UNA CORRIDA Y OTRA: solo el rendimiento del día en curso
+# -- la última barra del gráfico, la fila HOY y los acumulados del margen. La
+# volatilidad, los pronósticos y los parámetros se quedan fijos toda la
+# jornada porque el ajuste corre sobre sesiones cerradas, que es lo que
+# significa que sigma_t esté condicionada a la información hasta ayer.
+
+on:
+  repository_dispatch:
+    types: [run-vol-intraday]
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "No publicar a Discord (solo generar PNGs)"
+        required: false
+        default: "false"
+      force:
+        description: "Publicar aunque esté fuera de la ventana horaria"
+        required: false
+        default: "false"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ventana horaria (13:30-17:30 UTC = 07:30-11:30 MX)
+        id: window
+        run: |
+          if [ "${{ github.event.inputs.dry }}" = "true" ]; then
+            echo "Modo seco: se permite fuera de ventana (no publica)."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            echo "Forzado a mano: se publica fuera de ventana."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Con el mercado cerrado el precio no se mueve: la imagen saldría
+          # idéntica a la anterior pero fechada hoy, que es peor que no
+          # publicarla.
+          dow=$(date -u +%u)
+          if [ "$dow" -gt 5 ]; then
+            echo "Fin de semana (día $dow), se omite esta corrida."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Se compara en minutos desde medianoche porque la ventana empieza
+          # y termina a media hora: 13:30 (=810) y 17:30 (=1050). Con una
+          # guarda por hora entera se colarían las corridas de 11:45 y 12:00
+          # MX, y la primera del día saldría a las 07:00 en vez de 07:30.
+          now=$(( $(date -u +%H) * 60 + $(date -u +%M) ))
+          if [ "$now" -lt 810 ] || [ "$now" -gt 1050 ]; then
+            echo "Fuera de ventana ($(date -u +%H:%M) UTC), se omite."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          repository: jttyr/vol-terminal
+          token: ${{ secrets.RUNNER_TOKEN }}
+        if: steps.window.outputs.proceed == 'true'
+
+      - uses: actions/setup-python@v6
+        if: steps.window.outputs.proceed == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        if: steps.window.outputs.proceed == 'true'
+        run: pip install -r requirements.txt
+
+      # La clave lleva el run_id para que cada corrida guarde su propia
+      # entrada, y restore-keys recupera la más reciente: así el id del
+      # mensaje que abrió la primera corrida del día llega a las siguientes.
+      - name: Recuperar el mensaje vivo de la jornada
+        if: steps.window.outputs.proceed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: cache
+          key: vol-mensajes-${{ github.run_id }}
+          restore-keys: vol-mensajes-
+
+      - name: Ajustar los modelos y actualizar el mensaje
+        if: steps.window.outputs.proceed == 'true'
+        env:
+          DISCORD_WEBHOOK_INDEX: ${{ secrets.DISCORD_WEBHOOK_INDEX }}
+          DISCORD_WEBHOOK_COMM: ${{ secrets.DISCORD_WEBHOOK_COMM }}
+          DISCORD_WEBHOOK_YIELDS: ${{ secrets.DISCORD_WEBHOOK_YIELDS }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DRY_RUN: ${{ github.event.inputs.dry || 'false' }}
+        run: python run_vol.py

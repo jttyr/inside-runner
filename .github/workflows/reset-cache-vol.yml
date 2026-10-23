@@ -1,0 +1,44 @@
+name: reset-cache-vol
+
+# Borra los caches 'vol-mensajes-*' cada dia a las 00:00 MX (06:00 UTC).
+#
+# vol-intraday.yml guarda su estado con clave vol-mensajes-<run_id> (unica
+# por corrida) y restore-keys recupera la mas reciente -- pero nunca borra
+# las anteriores, asi que se acumulan sin limite. Eso vacio el almacenamiento
+# de Actions de la cuenta una vez (compartido entre todos los repos). Solo la
+# mas reciente hace falta, y esa la vuelve a crear la primera corrida despues
+# del reset. Mismo patron que reset-marcador.yml en market-drivers.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"     # 06:00 UTC = 00:00 MX (Mexico no tiene horario de verano)
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+concurrency:
+  group: reset-cache-vol
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: borrar caches vol-mensajes-*
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          ids=$(gh api "repos/$REPO/actions/caches" --paginate \
+                  --jq '.actions_caches[] | select(.key|startswith("vol-mensajes-")) | .id')
+          if [ -z "$ids" ]; then
+            echo "No hay caches 'vol-mensajes-*' que borrar. Ya limpio."
+            exit 0
+          fi
+          for id in $ids; do
+            gh api -X DELETE "repos/$REPO/actions/caches/$id" \
+              && echo "Borrado cache id $id" \
+              || echo "No se pudo borrar cache id $id"
+          done

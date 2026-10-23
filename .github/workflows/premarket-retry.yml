@@ -1,0 +1,32 @@
+name: premarket-retry
+
+# Red de seguridad para premarket-discord: si una corrida termina en failure
+# (p.ej. "job not acquired by runner", 2026-07-09, y el premarket no llego a
+# Discord), la re-lanza hasta 2 veces. Solo reintenta dentro de la ventana de
+# entrega (11:00-16:59 UTC) para no resucitar corridas nocturnas o de prueba.
+# El guard del script (--una-vez, 1 envio por dia NY) evita duplicados si el
+# fallo ocurrio despues de publicar.
+on:
+  workflow_run:
+    workflows: [premarket-discord]
+    types: [completed]
+
+permissions:
+  actions: write
+
+jobs:
+  reintentar:
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt < 3
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: re-lanzar la corrida fallida
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          h=$(date -u +%H)
+          if [ "$h" -lt 11 ] || [ "$h" -ge 17 ]; then
+            echo "fuera de la ventana 11:00-16:59 UTC -> no se reintenta"; exit 0
+          fi
+          sleep 90
+          gh run rerun ${{ github.event.workflow_run.id }} --repo ${{ github.repository }}

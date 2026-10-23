@@ -1,0 +1,161 @@
+name: premarket-discord
+
+# ENTREGA (L-V) a las 06:32 MX (08:32 NY). UN solo disparador para evitar
+# mensajes duplicados:
+#   1) repository_dispatch  -> cron-job.org lo dispara UNA vez al dia (fiable,
+#      con la Mac apagada). Es el mecanismo unico de produccion.
+#   2) workflow_dispatch    -> disparo manual desde github.com si hiciera falta.
+# NO se usa el `schedule` nativo de GitHub: disparaba con retraso y en rafaga
+# (varias corridas juntas) -> publicaba de mas. cron-job.org ya cubre esto.
+# Si la corrida termina en failure (2026-07-09: GitHub no asigno runner y el
+# premarket no llego), premarket-retry.yml la re-lanza automaticamente.
+on:
+  repository_dispatch:
+    types: [run-premarket]
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "dry-run: genera las tarjetas pero NO publica"
+        default: false
+        type: boolean
+
+concurrency:
+  group: premarket
+  cancel-in-progress: false
+
+jobs:
+  premarket:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      # Un repository_dispatch solo es valido en la manana de entrega
+      # (11:00-16:59 UTC). El 2026-07-09 a las 03:32 UTC un disparo fantasma
+      # publico tarjetas en la noche porque el cache del marcador ya no
+      # existia; esta ventana por hora no depende del cache. Los disparos
+      # manuales (workflow_dispatch) no tienen restriccion.
+      - name: ventana de produccion
+        id: ventana
+        run: |
+          h=$(date -u +%H)
+          if [ "${{ github.event_name }}" = "repository_dispatch" ] && { [ "$h" -lt 11 ] || [ "$h" -ge 17 ]; }; then
+            echo "repository_dispatch a las ${h}h UTC, fuera de 11:00-16:59 -> no se publica"
+            echo "go=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=si" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: jttyr/market-drivers
+          token: ${{ secrets.RUNNER_TOKEN }}
+        if: steps.ventana.outputs.go == 'si'
+
+      - uses: actions/setup-python@v5
+        if: steps.ventana.outputs.go == 'si'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: instalar dependencias
+        if: steps.ventana.outputs.go == 'si'
+        run: pip install -r requirements.txt
+
+      - name: restaurar memoria de fases (estado/)
+        if: steps.ventana.outputs.go == 'si'
+        uses: actions/cache@v4
+        with:
+          path: estado
+          key: estado-fases-${{ github.run_id }}
+          restore-keys: |
+            estado-fases-
+
+      - name: restaurar marcador de envio
+        if: steps.ventana.outputs.go == 'si'
+        uses: actions/cache@v4
+        with:
+          path: .ultimo_envio_discord
+          key: enviado-${{ github.run_id }}
+          restore-keys: |
+            enviado-
+
+      - name: generar tarjetas y publicar en Discord
+        if: steps.ventana.outputs.go == 'si'
+        env:
+          MD_DISCORD_WEBHOOK: ${{ secrets.MD_DISCORD_WEBHOOK }}
+        run: |
+          if [ "${{ inputs.dry }}" = "true" ]; then
+            python premarket_discord.py --dry
+          else
+            python premarket_discord.py --una-vez
+          fi
+
+      # Esto deja UNA clave fija por activo por dia (latest/ES_2026-09-22.png) en una rama
+      # aparte -- el dashboard web solo pide esos archivos, sin buscar nada.
+      # Se conservan los ultimos 4 dias por ticker (para el historial de
+      # comparacion con flechas/swipe) y se poda el resto. No toca `main` ni
+      # el flujo de Discord de arriba: corre despues, y si falla no tumba la
+      # corrida (no hay `set -e` en el paso de Discord ni viceversa).
+      - name: publicar ultimas tarjetas en rama data
+        if: always() && steps.ventana.outputs.go == 'si'
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+        run: |
+          set -e
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/jttyr/market-drivers.git"
+          rm -rf /tmp/data-branch
+          if git clone --quiet --branch data --single-branch "$REPO_URL" /tmp/data-branch 2>/dev/null; then
+            cd /tmp/data-branch
+          else
+            mkdir -p /tmp/data-branch && cd /tmp/data-branch
+            git init --quiet
+            git remote add origin "$REPO_URL"
+            git checkout --quiet --orphan data
+          fi
+          mkdir -p latest
+          shopt -s nullglob
+          TODAY=$(TZ=America/Mexico_City date +%F)
+          tickers=""
+          for f in "$GITHUB_WORKSPACE"/cards/*.png; do
+            base=$(basename "$f" .png)
+            ticker=$(echo "$base" | cut -d'_' -f1)
+            cp "$f" "latest/${ticker}_${TODAY}.png"
+            tickers="$tickers $ticker"
+          done
+          for ticker in $(echo "$tickers" | tr ' ' '\n' | sort -u); do
+            ls -1 "latest/${ticker}"_*.png 2>/dev/null | sort -r | tail -n +5 | xargs -r rm -f
+          done
+          git add -A
+          git commit --quiet -m "actualizar tarjetas $(date -u +%FT%TZ)" --allow-empty
+          git push --quiet origin data --force
+
+      # Copia publica y efimera para un dashboard que no depende de ninguna
+      # Mac encendida: solo imagenes, en un repo PUBLICO aparte que se
+      # vacia solo cada noche (ver inside-terminal-images/.github/workflows
+      # /wipe-daily.yml). Este repo (con el codigo real) sigue privado.
+      - name: publicar imagenes publicas efimeras (dashboard sin Mac)
+        if: always() && steps.ventana.outputs.go == 'si'
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_IMAGES_TOKEN }}
+        run: |
+          set -e
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          rm -rf /tmp/public-images
+          git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/jttyr/inside-terminal-images.git" /tmp/public-images
+          cd /tmp/public-images
+          mkdir -p images
+          shopt -s nullglob
+          for f in "$GITHUB_WORKSPACE"/cards/*.png; do
+            base=$(basename "$f" .png)
+            ticker=$(echo "$base" | cut -d'_' -f1)
+            cp "$f" "images/${ticker}.png"
+          done
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit --quiet -m "actualizar imagenes publicas $(date -u +%FT%TZ)"
+            git push --quiet origin main
+          fi

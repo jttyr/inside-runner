@@ -1,0 +1,46 @@
+name: reset-cache-gex
+
+# Borra los caches 'gex-snapshot-*' cada dia a las 00:00 MX (06:00 UTC).
+#
+# gex-intraday.yml guarda el snapshot del dia con clave gex-snapshot-<run_id>
+# (unica por corrida) y restore-keys recupera la mas reciente -- pero nunca
+# borra las anteriores, asi que se acumulan sin limite (una corrida cada 15
+# min, L-V, son ~24 entradas nuevas por dia). Eso vacio el almacenamiento de
+# Actions de la cuenta una vez. Solo la mas reciente hace falta -- daily_cache
+# ya lo dice: "el open interest se publica una sola vez al dia" -- y esa la
+# vuelve a crear la primera corrida despues del reset. Mismo patron que
+# reset-marcador.yml en market-drivers.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"     # 06:00 UTC = 00:00 MX (Mexico no tiene horario de verano)
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+concurrency:
+  group: reset-cache-gex
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: borrar caches gex-snapshot-*
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          ids=$(gh api "repos/$REPO/actions/caches" --paginate \
+                  --jq '.actions_caches[] | select(.key|startswith("gex-snapshot-")) | .id')
+          if [ -z "$ids" ]; then
+            echo "No hay caches 'gex-snapshot-*' que borrar. Ya limpio."
+            exit 0
+          fi
+          for id in $ids; do
+            gh api -X DELETE "repos/$REPO/actions/caches/$id" \
+              && echo "Borrado cache id $id" \
+              || echo "No se pudo borrar cache id $id"
+          done

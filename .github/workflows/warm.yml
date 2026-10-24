@@ -1,0 +1,22 @@
+name: warm
+
+# Render (plan gratis) duerme el servicio tras ~15 min sin visitas, y la primera
+# visita despues de eso tarda mucho en "despertarlo". Este ping cada 5 min lo
+# mantiene despierto para que la pagina abra al instante.
+# (Respaldo: tambien se puede crear un job en cron-job.org que haga GET a
+# /healthz cada 5 min; los schedule de GitHub a veces se retrasan.)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: despertar / mantener despierto
+        run: |
+          curl -s -o /dev/null -w "healthz %{http_code} en %{time_total}s\n" --max-time 90 https://terminal.insidetrades.app/healthz || true
+          curl -s -o /dev/null -w "inicio  %{http_code} en %{time_total}s\n" --max-time 90 https://terminal.insidetrades.app/ || true

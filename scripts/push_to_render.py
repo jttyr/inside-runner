@@ -53,8 +53,8 @@ def step(name, fn):
         print("fallo", name, type(e).__name__, str(e)[:80])
 
 
-step("gex", lambda: grab("gex-terminal", ["SPY", "QQQ", "DIA", "GLD"], 4))
-step("market-drivers", lambda: grab("market-drivers", ["ES", "NQ", "DJI", "XAUUSD"], 4))
+step("gex", lambda: grab("gex-terminal", ["SPY", "QQQ", "DIA", "GLD"], 7))
+step("market-drivers", lambda: grab("market-drivers", ["ES", "NQ", "DJI", "XAUUSD"], 7))
 step("valuacion", lambda: grab("macro-valuation-data", ["OIL", "BRENT", "DXY", "US02Y", "US10Y", "US30Y"], 4))
 
 

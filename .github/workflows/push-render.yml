@@ -1,0 +1,32 @@
+name: push-render
+
+# Empuja a la terminal (Render) los datos de GEX, Market Drivers, valuacion, macro,
+# sectores, historial de precios y tipo de cambio. Asi la pagina funciona aunque la
+# instancia de Render no tenga salida a internet. Se dispara solo cada ~5 min y
+# tambien desde cron-job.org (repository_dispatch: run-push-render).
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  repository_dispatch:
+    types: [run-push-render]
+  workflow_dispatch:
+
+concurrency:
+  group: push-render
+  cancel-in-progress: true
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: empujar datos
+        env:
+          RUNNER_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+        run: python -W ignore scripts/push_to_render.py

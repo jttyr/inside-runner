@@ -79,7 +79,14 @@ def yahoo(sym):
 
 def fred(sid):
     since = (datetime.utcnow() - timedelta(days=400)).strftime("%Y-%m-%d")
-    rows = get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}&cosd={since}", timeout=40).decode().strip().splitlines()[1:]
+    rows = None
+    for intento in range(2):                     # FRED a veces tarda; un reintento
+        try:
+            rows = get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}&cosd={since}", timeout=75).decode().strip().splitlines()[1:]
+            break
+        except Exception:
+            if intento:
+                raise
     out = []
     for ln in rows:
         d, _, v = ln.partition(",")

@@ -17,7 +17,10 @@ on:
     types: [run-sectors]
   workflow_dispatch:
   schedule:
-    - cron: "0 */2 * * *"   # respaldo suelto, por si cron-job.org fallara
+    # Respaldo propio (no depende de cron-job.org): cada 15 min con el mercado de EE.UU. abierto
+    # (12:00-20:45 UTC = 06:00-14:45 MX, lun-vie) y cada hora el resto del tiempo.
+    - cron: "*/15 12-20 * * 1-5"
+    - cron: "0 21-23,0-11 * * *"
 
 concurrency:
   group: data-macro-indicators

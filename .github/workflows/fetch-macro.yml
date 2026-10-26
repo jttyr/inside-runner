@@ -13,7 +13,9 @@ on:
     types: [run-macro]
   workflow_dispatch:
   schedule:
-    - cron: "20 12,14,18 * * *"   # respaldo suelto, por si cron-job.org fallara
+    # Respaldo propio (no depende de cron-job.org): 06:20, 08:20 y 12:20 MX, mas una
+    # revision de cierre a las 16:20 MX para validar que el dato del dia quedo publicado.
+    - cron: "20 12,14,18,22 * * *"
 
 concurrency:
   group: data-macro-indicators

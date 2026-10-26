@@ -30,6 +30,22 @@ on:
         description: "Previsualizar una hora pasada (HH:MM, mercado cerrado no bloquea) -- no publica"
         required: false
         default: ""
+      json_only:
+        description: "PRUEBA: generar solo el JSON de la terminal (modo de madrugada)"
+        required: false
+        default: "false"
+      force_carry:
+        description: "PRUEBA: usar el gamma de la sesion pasada aunque el mercado ya haya abierto"
+        required: false
+        default: "false"
+      no_publish:
+        description: "PRUEBA: no publicar nada en la rama data"
+        required: false
+        default: "false"
+      code_ref:
+        description: "PRUEBA: rama del codigo (jttyr/gex-terminal) a usar; vacio = main"
+        required: false
+        default: ""
 
 concurrency:
   group: data-gex-terminal
@@ -45,7 +61,7 @@ jobs:
       # disparo manual publicando a deshoras mandaría contexto de una sesión
       # que no corresponde. La única excepción es el modo seco, que no
       # publica nada y sirve para revisar el resultado cuando sea.
-      - name: Ventana horaria (14:00-20:00 UTC = 08:00-14:00 MX)
+      - name: Ventana horaria (10:00-20:00 UTC = 04:00-14:00 MX)
         id: window
         run: |
           if [ "${{ github.event.inputs.dry }}" = "true" ]; then
@@ -71,7 +87,9 @@ jobs:
           fi
 
           hour=$(date -u +%H)
-          if [ "$hour" -lt 14 ] || [ "$hour" -ge 20 ]; then
+          # Desde las 04:00 MX corre el modo solo-JSON (la terminal con su grafico
+          # andando antes de la apertura); desde las 08:00 MX, el flujo de siempre.
+          if [ "$hour" -lt 10 ] || [ "$hour" -ge 20 ]; then
             echo "Fuera de ventana horaria ($hour UTC), se omite esta corrida."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
           else
@@ -82,6 +100,7 @@ jobs:
         with:
           repository: jttyr/gex-terminal
           token: ${{ secrets.RUNNER_TOKEN }}
+          ref: ${{ github.event.inputs.code_ref }}
         if: steps.window.outputs.proceed == 'true'
 
       - uses: actions/setup-python@v5
@@ -104,6 +123,21 @@ jobs:
           key: gex-snapshot-${{ github.run_id }}
           restore-keys: gex-snapshot-
 
+      # El gamma de la sesion pasada sale de los JSON que ya estan publicados en la
+      # rama data: antes de la apertura no hay foto de hoy, y asi el grafico de la
+      # terminal arranca con el precio de hoy sobre el gamma de ayer (marcado como tal).
+      - name: Recuperar gamma de la sesion pasada
+        if: steps.window.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+        run: |
+          mkdir -p carry
+          rm -rf /tmp/prev
+          if git clone --quiet --depth 1 --branch data --single-branch "https://x-access-token:${GH_TOKEN}@github.com/jttyr/gex-terminal.git" /tmp/prev 2>/dev/null; then
+            cp /tmp/prev/latest/*.json carry/ 2>/dev/null || true
+          fi
+          echo "JSON previos disponibles: $(ls carry 2>/dev/null | wc -l)"
+
       - name: Generar y publicar imagen
         if: steps.window.outputs.proceed == 'true'
         env:
@@ -117,14 +151,26 @@ jobs:
           S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
           DRY_RUN: ${{ github.event.inputs.dry || (secrets.DISCORD_WEBHOOK_INDEX == '' && 'true' || 'false') }}
           AS_OF: ${{ github.event.inputs.as_of }}
-        run: python run_gex.py ${AS_OF:+--as-of "$AS_OF"}
+          JSON_ONLY: ${{ github.event.inputs.json_only }}
+          FORCE_CARRY: ${{ github.event.inputs.force_carry }}
+        run: |
+          # Antes de las 08:00 MX (14:00 UTC): solo JSON para la terminal, sin imagenes ni Discord.
+          # Desde las 08:00 MX: el flujo de siempre (con --auto, que solo difiere en invierno,
+          # cuando a esa hora el mercado todavia no abre).
+          EXTRA=""
+          [ "$FORCE_CARRY" = "true" ] && EXTRA="--force-carry"
+          if [ "$(date -u +%H)" -lt 14 ] || [ "$JSON_ONLY" = "true" ]; then
+            python run_gex.py --json-only $EXTRA ${AS_OF:+--as-of "$AS_OF"}
+          else
+            python run_gex.py --auto ${AS_OF:+--as-of "$AS_OF"}
+          fi
 
       # Esto deja UNA clave
       # fija por activo (latest/QQQ.png) en una rama aparte -- el dashboard
       # web solo pide ese archivo, sin buscar nada. No toca `main` ni el
       # flujo de Discord/S3 de arriba: corre despues y no lo afecta.
       - name: Publicar ultimas imagenes en rama data
-        if: always() && steps.window.outputs.proceed == 'true'
+        if: always() && steps.window.outputs.proceed == 'true' && github.event.inputs.no_publish != 'true'
         env:
           GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
         run: |
@@ -171,7 +217,7 @@ jobs:
       # vacia solo cada noche (ver inside-terminal-images/.github/workflows
       # /wipe-daily.yml). Este repo (con el codigo real) sigue privado.
       - name: Publicar imagenes publicas efimeras (dashboard sin Mac)
-        if: always() && steps.window.outputs.proceed == 'true'
+        if: always() && steps.window.outputs.proceed == 'true' && github.event.inputs.no_publish != 'true'
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_IMAGES_TOKEN }}
         run: |

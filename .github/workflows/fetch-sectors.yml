@@ -13,6 +13,11 @@ name: Desempeño por Sector
 # donde el precio se mueve mas), cada hora el resto del dia.
 
 on:
+  # Se ejecuta justo despues de cada corrida de Market Drivers (premarket 06:32 MX y
+  # actualizacion de apertura): asi macro y sectores salen siempre a la misma hora que ellos.
+  workflow_run:
+    workflows: [premarket-discord, market-open-update]
+    types: [completed]
   repository_dispatch:
     types: [run-sectors]
   workflow_dispatch:
@@ -28,6 +33,7 @@ concurrency:
 
 jobs:
   publish:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write

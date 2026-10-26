@@ -48,7 +48,8 @@ on:
         default: ""
 
 concurrency:
-  group: data-gex-terminal
+  # las corridas de prueba (no_publish) no comparten fila con las reales
+  group: ${{ github.event.inputs.no_publish == 'true' && 'gex-prueba' || 'data-gex-terminal' }}
   cancel-in-progress: false
 
 jobs:

@@ -45,8 +45,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          h=$(date -u +%H); d=$(date -u +%u)
-          if [ "$d" -gt 5 ] || [ "$h" -lt 10 ] || [ "$h" -ge 14 ]; then
+          h=$(date -u +%H); d=$(date -u +%u); ny=$(TZ=America/New_York date +%H)
+          # desde las 04:00 NY (hora de Nueva York: sigue sola el cambio de horario)
+          if [ "$d" -gt 5 ] || [ "$((10#$ny))" -lt 4 ] || [ "$h" -ge 14 ]; then
             echo "fuera de la ventana de madrugada (dia $d, $h UTC): nada que lanzar"; exit 0
           fi
           last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow gex-intraday.yml --limit 1 --json createdAt --jq '.[0].createdAt // empty')

@@ -47,11 +47,12 @@ on:
         required: false
         default: ""
 
-  # Programacion PROPIA para la madrugada (04:00-07:55 MX = 10:00-13:55 UTC, lunes a viernes): asi el grafico
+  # Programacion PROPIA para la madrugada (desde las 04:00 NY = 02:00 MX en verano, 03:00 MX en invierno;
+  # el filtro fino por hora de Nueva York esta en la ventana de abajo, lunes a viernes): asi el grafico
   # arranca solo, sin depender de que cron-job.org dispare a esa hora. Antes de las 08:00 MX este flujo solo
   # genera datos para la terminal (sin imagenes ni Discord), por lo que repetirlo junto al cron no estorba.
   schedule:
-    - cron: "*/5 10-13 * * 1-5"
+    - cron: "*/5 8-13 * * 1-5"
 
 concurrency:
   # las corridas de prueba (no_publish) no comparten fila con las reales
@@ -68,7 +69,7 @@ jobs:
       # disparo manual publicando a deshoras mandaría contexto de una sesión
       # que no corresponde. La única excepción es el modo seco, que no
       # publica nada y sirve para revisar el resultado cuando sea.
-      - name: Ventana horaria (10:00-20:00 UTC = 04:00-14:00 MX)
+      - name: Ventana horaria (desde 04:00 NY hasta 20:00 UTC)
         id: window
         run: |
           if [ "${{ github.event.inputs.dry }}" = "true" ]; then
@@ -94,9 +95,11 @@ jobs:
           fi
 
           hour=$(date -u +%H)
-          # Desde las 04:00 MX corre el modo solo-JSON (la terminal con su grafico
-          # andando antes de la apertura); desde las 08:00 MX, el flujo de siempre.
-          if [ "$hour" -lt 10 ] || [ "$hour" -ge 20 ]; then
+          # La hora de Nueva York manda (sigue sola el cambio de horario): desde las
+          # 04:00 NY corre el modo solo-JSON (la terminal con su grafico andando y el
+          # gamma estimado antes de la apertura); desde las 14 UTC, el flujo de siempre.
+          ny=$(TZ=America/New_York date +%H)
+          if [ "$((10#$ny))" -lt 4 ] || [ "$hour" -ge 20 ]; then
             echo "Fuera de ventana horaria ($hour UTC), se omite esta corrida."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
           else

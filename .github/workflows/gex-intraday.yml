@@ -47,6 +47,12 @@ on:
         required: false
         default: ""
 
+  # Programacion PROPIA para la madrugada (04:00-07:55 MX = 10:00-13:55 UTC, lunes a viernes): asi el grafico
+  # arranca solo, sin depender de que cron-job.org dispare a esa hora. Antes de las 08:00 MX este flujo solo
+  # genera datos para la terminal (sin imagenes ni Discord), por lo que repetirlo junto al cron no estorba.
+  schedule:
+    - cron: "*/5 10-13 * * 1-5"
+
 concurrency:
   # las corridas de prueba (no_publish) no comparten fila con las reales
   group: ${{ github.event.inputs.no_publish == 'true' && 'gex-prueba' || 'data-gex-terminal' }}

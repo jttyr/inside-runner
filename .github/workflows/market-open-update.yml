@@ -18,6 +18,10 @@ name: market-open-update
 on:
   schedule:
     - cron: "0 14 * * 1-5"
+  # Disparo fiable desde cron-job.org (la programacion nativa de GitHub llega tarde o no llega: el 26-oct
+  # no se ejecuto). Misma guarda de dia habil y de hora que el schedule.
+  repository_dispatch:
+    types: [run-market-open]
   workflow_dispatch:
     inputs:
       dry:
@@ -43,8 +47,9 @@ jobs:
         id: ventana
         run: |
           dow=$(date -u +%u)
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$dow" -gt 5 ]; then
-            echo "fin de semana (dia ${dow} UTC) -> no se publica"
+          hour=$(date -u +%H)
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ] && { [ "$dow" -gt 5 ] || [ "$hour" -lt 12 ] || [ "$hour" -ge 21 ]; }; then
+            echo "fuera de dia habil u horario de mercado (dia ${dow}, ${hour} UTC) -> no se publica"
             echo "go=no" >> "$GITHUB_OUTPUT"
           else
             echo "go=si" >> "$GITHUB_OUTPUT"

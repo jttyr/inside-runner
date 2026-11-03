@@ -1,0 +1,72 @@
+name: Stock Seeker
+
+# Genera y publica stock-seeker.json (radar de oportunidades en acciones, fuentes gratis:
+# Yahoo Finance y SEC EDGAR) en la rama data de macro-indicators.
+# Disparador principal: cron-job.org -> repository_dispatch (run-stock-seeker), una o dos veces al dia
+# (antes de la apertura y despues del cierre). `schedule` queda solo como respaldo.
+
+on:
+  repository_dispatch:
+    types: [run-stock-seeker]
+  workflow_dispatch:
+  schedule:
+    - cron: "40 11 * * 1-5"
+    - cron: "30 22 * * 1-5"
+
+concurrency:
+  group: data-macro-indicators
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: jttyr/macro-indicators
+          token: ${{ secrets.RUNNER_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Radar anterior (para marcar las empresas nuevas)
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+        run: |
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/jttyr/macro-indicators.git"
+          if git clone --quiet --depth 1 --branch data --single-branch "$REPO_URL" /tmp/prev-data 2>/dev/null && [ -f /tmp/prev-data/latest/stock-seeker.json ]; then
+            echo "STOCK_SEEKER_PREV=/tmp/prev-data/latest/stock-seeker.json" >> "$GITHUB_ENV"
+          fi
+
+      - name: Generar radar
+        run: python fetch_stock_seeker.py
+
+      - name: Publicar en rama data
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+        run: |
+          set -e
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/jttyr/macro-indicators.git"
+          rm -rf /tmp/data-branch
+          if git clone --quiet --branch data --single-branch "$REPO_URL" /tmp/data-branch 2>/dev/null; then
+            cd /tmp/data-branch
+          else
+            mkdir -p /tmp/data-branch && cd /tmp/data-branch
+            git init --quiet
+            git remote add origin "$REPO_URL"
+            git checkout --quiet --orphan data
+          fi
+          mkdir -p latest
+          cp "$GITHUB_WORKSPACE/output/stock-seeker.json" latest/stock-seeker.json
+          git add -A
+          git commit --quiet -m "actualizar stock seeker $(date -u +%FT%TZ)" --allow-empty
+          git push --quiet origin data --force

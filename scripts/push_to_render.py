@@ -115,7 +115,65 @@ def fxrate():
     fx = {"ok": True, "mxn_per_usd": mxn, "mxn_per_eur": mxn / eur, "date": j.get("date")}
 step("tipo de cambio", fxrate)
 
-bundle = {"files": files, "listings": listings, "history": history, "fx": fx}
+# ---- noticias en vivo: se bajan aqui (el runner siempre tiene internet) y se empujan ya filtradas y en espanol ----
+live = None
+FEEDS = [("Yahoo Finance", "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC,%5EIXIC,%5EDJI,CL=F,DX-Y.NYB,%5ETNX&region=US&lang=en-US"),
+         ("CNBC", "https://www.cnbc.com/id/100003114/device/rss/rss.html"), ("CNBC", "https://www.cnbc.com/id/10000664/device/rss/rss.html"),
+         ("MarketWatch", "https://feeds.content.dowjones.io/public/rss/mw_topstories")]
+BLOCK = re.compile(r"penny stocks?|value stocks?|dividend stocks?|growth stocks?|\bROE\b|in-office|^\d+ [\w ,&-]*\bstocks\b", re.I)
+RELEV = re.compile(
+    r"\b(stocks?|shares|markets?|wall street|s&p|nasdaq|dow|futures|fed|fomc|powell|warsh|rates?|yields?|treasur\w*|bonds?|"
+    r"inflation|cpi|pce|jobs|payrolls?|unemployment|gdp|economy|economic|tariffs?|oil|crude|brent|wti|opec|gold|dollar|"
+    r"currency|earnings|revenue|guidance|ipo|merger|acquir\w*|deal|bank\w*|credit|debt|chips?|semiconductors?|ai|nvidia|"
+    r"apple|microsoft|amazon|alphabet|google|meta|tesla|oracle|amd|intel|iran|china|russia|ukraine|israel|sanctions?)\b", re.I)
+
+
+def clean(t, n):
+    t = re.sub(r"<[^>]+>", " ", t or ""); t = re.sub(r"&[a-z]+;|&#\d+;", " ", t); t = re.sub(r"\s+", " ", t).strip()
+    return t if len(t) <= n else t[: n - 1].rsplit(" ", 1)[0].rstrip(",.;: ") + "\u2026"
+
+
+def noticias():
+    global live
+    import time, xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+    now, items = time.time(), []
+    for src, url in FEEDS:
+        try:
+            root = ET.fromstring(get(url, {"User-Agent": "Mozilla/5.0 (inside-market-terminal)"}, timeout=15))
+        except Exception as e:
+            print("feed omitido", src, type(e).__name__); continue
+        for it in root.iter("item"):
+            title, link = clean(it.findtext("title"), 160), (it.findtext("link") or "").strip()
+            if not title or not link.startswith("http"):
+                continue
+            try:
+                ts = int(parsedate_to_datetime(it.findtext("pubDate")).timestamp())
+            except Exception:
+                continue
+            items.append({"t": title, "s": src, "d": clean(it.findtext("description"), 110), "u": link, "ts": ts})
+    seen, out = set(), []
+    for it in sorted(items, key=lambda i: -i["ts"]):
+        key = re.sub(r"\W+", "", it["t"].lower())[:60]
+        if key in seen or it["ts"] < now - 36 * 3600 or not RELEV.search(it["t"]) or BLOCK.search(it["t"]):
+            continue
+        seen.add(key); out.append(it)
+    out = out[:40]
+    for it in out:                                   # al espanol (traductor gratuito); si falla, queda en ingles
+        try:
+            q = urllib.request.quote(it["t"])
+            j = json.loads(get("https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=es&dt=t&q=" + q, {"User-Agent": "Mozilla/5.0"}, timeout=10))
+            es = "".join(seg[0] for seg in j[0] if seg and seg[0]).strip()
+            if es:
+                it["t"] = es
+        except Exception:
+            pass
+    if not out:
+        raise RuntimeError("sin titulares")
+    live = {"items": out, "updated": int(now)}
+step("noticias", noticias)
+
+bundle = {"files": files, "listings": listings, "history": history, "fx": fx, "live": live}
 body = json.dumps(bundle).encode()
 print(f"paquete: {len(files)} archivos, {len(listings)} listados, {len(history)} historiales, {len(body)//1024} KB")
 req = urllib.request.Request(URL, data=body, method="POST", headers={"Authorization": f"Bearer {TOK}", "Content-Type": "application/json", "User-Agent": "inside-push"})

@@ -34,7 +34,7 @@ jobs:
       # disparo manual publicando a deshoras mandaría contexto de una sesión
       # que no corresponde. La única excepción es el modo seco, que no
       # publica nada y sirve para revisar el resultado cuando sea.
-      - name: Ventana horaria (13:00-14:59 UTC = 07:00-08:59 MX)
+      - name: Ventana horaria (09:25-10:15 hora de Nueva York)
         id: window
         run: |
           if [ "${{ github.event.inputs.dry }}" = "true" ]; then
@@ -61,8 +61,11 @@ jobs:
           # holgura, cualquier demora de GitHub caía en la hora siguiente y
           # la foto de apertura se perdía en silencio.
           hour=$(date -u +%H)
-          if [ "$hour" -lt 13 ] || [ "$hour" -ge 15 ]; then
-            echo "Fuera de ventana horaria ($hour UTC), se omite esta corrida."
+          nym=$((10#$(TZ=America/New_York date +%H) * 60 + 10#$(TZ=America/New_York date +%M)))
+          # Hora de Nueva York (sigue sola el cambio de horario): cron-job.org dispara a las 07:30 Y a las
+          # 08:30 MX y solo la que cae entre 09:25 y 10:15 NY publica; la otra se descarta.
+          if [ "$nym" -lt 565 ] || [ "$nym" -gt 615 ]; then
+            echo "Fuera de ventana horaria ($((nym/60)):$(printf %02d $((nym%60))) NY, $hour UTC), se omite esta corrida."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
           else
             echo "proceed=true" >> "$GITHUB_OUTPUT"

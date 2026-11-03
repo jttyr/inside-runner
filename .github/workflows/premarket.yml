@@ -1,6 +1,6 @@
 name: premarket-discord
 
-# ENTREGA (L-V) a las 06:32 MX (08:32 NY). UN solo disparador para evitar
+# ENTREGA (L-V) a las 08:32 NY (06:32 MX en verano, 07:32 MX en invierno). UN solo disparador para evitar
 # mensajes duplicados:
 #   1) repository_dispatch  -> cron-job.org lo dispara UNA vez al dia (fiable,
 #      con la Mac apagada). Es el mecanismo unico de produccion.
@@ -39,12 +39,24 @@ jobs:
         id: ventana
         run: |
           h=$(date -u +%H)
-          if [ "${{ github.event_name }}" = "repository_dispatch" ] && { [ "$h" -lt 11 ] || [ "$h" -ge 17 ]; }; then
-            echo "repository_dispatch a las ${h}h UTC, fuera de 11:00-16:59 -> no se publica"
-            echo "go=no" >> "$GITHUB_OUTPUT"
-          else
-            echo "go=si" >> "$GITHUB_OUTPUT"
+          nym=$((10#$(TZ=America/New_York date +%H) * 60 + 10#$(TZ=America/New_York date +%M)))
+          # Hora de Nueva York manda: cron-job.org dispara a las 06:32 Y a las 07:32 MX, y solo la que
+          # cae en 08:25-09:20 NY publica (en verano la de 06:32, en invierno la de 07:32); la otra se
+          # descarta sola. Un reintento (run_attempt > 1) conserva la ventana amplia de antes.
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            if [ "${{ github.run_attempt }}" = "1" ]; then
+              if [ "$nym" -lt 505 ] || [ "$nym" -gt 560 ]; then
+                echo "repository_dispatch a las $((nym/60)):$(printf %02d $((nym%60))) NY, fuera de 08:25-09:20 -> no se publica"
+                echo "go=no" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            elif [ "$h" -lt 11 ] || [ "$h" -ge 17 ]; then
+              echo "reintento a las ${h}h UTC, fuera de 11:00-16:59 -> no se publica"
+              echo "go=no" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
+          echo "go=si" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:

@@ -1,7 +1,8 @@
 name: Stock Seeker
 
 # Genera y publica stock-seeker.json (radar de oportunidades en acciones, fuentes gratis:
-# Yahoo Finance y SEC EDGAR) en la rama data de macro-indicators.
+# Yahoo Finance y SEC EDGAR) en la rama data-stock de macro-indicators (rama propia y cola propia: no
+# bloquea ni pisa a sectores/macro, que comparten la rama data).
 # Disparador principal: cron-job.org -> repository_dispatch (run-stock-seeker), una o dos veces al dia
 # (antes de la apertura y despues del cierre). `schedule` queda solo como respaldo.
 
@@ -14,7 +15,7 @@ on:
     - cron: "30 22 * * 1-5"
 
 concurrency:
-  group: data-macro-indicators
+  group: stock-seeker
   cancel-in-progress: false
 
 jobs:
@@ -41,7 +42,7 @@ jobs:
           GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
         run: |
           REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/jttyr/macro-indicators.git"
-          if git clone --quiet --depth 1 --branch data --single-branch "$REPO_URL" /tmp/prev-data 2>/dev/null && [ -f /tmp/prev-data/latest/stock-seeker.json ]; then
+          if git clone --quiet --depth 1 --branch data-stock --single-branch "$REPO_URL" /tmp/prev-data 2>/dev/null && [ -f /tmp/prev-data/latest/stock-seeker.json ]; then
             echo "STOCK_SEEKER_PREV=/tmp/prev-data/latest/stock-seeker.json" >> "$GITHUB_ENV"
           fi
 
@@ -57,16 +58,16 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/jttyr/macro-indicators.git"
           rm -rf /tmp/data-branch
-          if git clone --quiet --branch data --single-branch "$REPO_URL" /tmp/data-branch 2>/dev/null; then
+          if git clone --quiet --branch data-stock --single-branch "$REPO_URL" /tmp/data-branch 2>/dev/null; then
             cd /tmp/data-branch
           else
             mkdir -p /tmp/data-branch && cd /tmp/data-branch
             git init --quiet
             git remote add origin "$REPO_URL"
-            git checkout --quiet --orphan data
+            git checkout --quiet --orphan data-stock
           fi
           mkdir -p latest
           cp "$GITHUB_WORKSPACE/output/stock-seeker.json" latest/stock-seeker.json
           git add -A
           git commit --quiet -m "actualizar stock seeker $(date -u +%FT%TZ)" --allow-empty
-          git push --quiet origin data --force
+          git push --quiet origin data-stock --force

@@ -97,9 +97,12 @@ jobs:
           hour=$(date -u +%H)
           # La hora de Nueva York manda (sigue sola el cambio de horario): desde las
           # 04:00 NY corre el modo solo-JSON (la terminal con su grafico andando y el
-          # gamma estimado antes de la apertura); desde las 14 UTC, el flujo de siempre.
+          # gamma estimado antes de la apertura); hasta las 16:10 NY.
           ny=$(TZ=America/New_York date +%H)
-          if [ "$((10#$ny))" -lt 4 ] || [ "$hour" -ge 20 ]; then
+          nym=$((10#$(TZ=America/New_York date +%H) * 60 + 10#$(TZ=America/New_York date +%M)))
+          # Se corta a las 16:10 NY (la hora de Nueva York, no UTC: en invierno 20:00 UTC son las
+          # 15:00 NY y se perdia la ultima hora de la sesion). La corrida del cierre alcanza a entrar.
+          if [ "$((10#$ny))" -lt 4 ] || [ "$nym" -gt 970 ]; then
             echo "Fuera de ventana horaria ($hour UTC), se omite esta corrida."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
           else

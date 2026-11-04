@@ -1,0 +1,68 @@
+name: Contexto de mercado
+
+# Motor cuantitativo y modelos de Macroentorno (diario): que variables (tasas, dolar, petroleo, oro, cobre) explican el movimiento reciente de ES/NQ,
+# cuanto suelen durar sus shocks y cuanto queda sin explicar. Publica context.json en la rama data-context de
+# macro-indicators (rama y cola propias, para no pisar a sectores/macro ni al Stock Seeker).
+# Disparador: cron-job.org -> repository_dispatch (run-context). `schedule` solo es respaldo.
+
+on:
+  repository_dispatch:
+    types: [run-context]
+  workflow_dispatch:
+  schedule:
+    - cron: "50 11 * * 1-5"
+    - cron: "40 22 * * 1-5"
+
+concurrency:
+  group: context
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: jttyr/macro-indicators
+          token: ${{ secrets.RUNNER_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Generar contexto
+        run: python fetch_context.py
+
+      - name: Generar modelos Macroentorno (liquidez, valoración, riesgo)
+        continue-on-error: true
+        run: python fetch_atlas.py
+
+      - name: Publicar en rama data-context
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+        run: |
+          set -e
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/jttyr/macro-indicators.git"
+          rm -rf /tmp/data-branch
+          if git clone --quiet --branch data-context --single-branch "$REPO_URL" /tmp/data-branch 2>/dev/null; then
+            cd /tmp/data-branch
+          else
+            mkdir -p /tmp/data-branch && cd /tmp/data-branch
+            git init --quiet
+            git remote add origin "$REPO_URL"
+            git checkout --quiet --orphan data-context
+          fi
+          mkdir -p latest
+          cp "$GITHUB_WORKSPACE/output/context.json" latest/context.json
+          [ -f "$GITHUB_WORKSPACE/output/atlas.json" ] && cp "$GITHUB_WORKSPACE/output/atlas.json" latest/atlas.json || true
+          git add -A
+          git commit --quiet -m "actualizar contexto $(date -u +%FT%TZ)" --allow-empty
+          git push --quiet origin data-context --force

@@ -43,6 +43,10 @@ jobs:
         continue-on-error: true
         run: python fetch_atlas.py
 
+      - name: Estudio de eventos (reacción real del precio en cada tipo de evento)
+        continue-on-error: true
+        run: python fetch_events.py
+
       - name: Publicar en rama data-context
         env:
           GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
@@ -63,6 +67,7 @@ jobs:
           mkdir -p latest
           cp "$GITHUB_WORKSPACE/output/context.json" latest/context.json
           [ -f "$GITHUB_WORKSPACE/output/atlas.json" ] && cp "$GITHUB_WORKSPACE/output/atlas.json" latest/atlas.json || true
+          [ -f "$GITHUB_WORKSPACE/output/event_study.json" ] && cp "$GITHUB_WORKSPACE/output/event_study.json" latest/event_study.json || true
           git add -A
           git commit --quiet -m "actualizar contexto $(date -u +%FT%TZ)" --allow-empty
           git push --quiet origin data-context --force

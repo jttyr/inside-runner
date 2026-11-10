@@ -63,6 +63,13 @@ def macro():
         files[f"{OWNER}/macro-indicators/{name}"] = gh_raw("macro-indicators", f"latest/{name}")
 step("macro", macro)
 
+def stock_seeker():
+    # radar de acciones (1.4 MB): se empuja para que la terminal no dependa de bajarlo ella misma desde Render
+    files[f"{OWNER}/macro-indicators/stock-seeker.json"] = json.loads(get(
+        f"https://api.github.com/repos/{OWNER}/macro-indicators/contents/latest/stock-seeker.json?ref=data-stock",
+        {"Authorization": f"Bearer {GH}", "Accept": "application/vnd.github.raw+json", "User-Agent": "inside-push"}, timeout=60))
+step("stock-seeker", stock_seeker)
+
 ASSETS = [("ES", "ES=F"), ("NQ", "NQ=F"), ("DJI", "^DJI"), ("XAUUSD", "GC=F"), ("WTI", "CL=F"), ("BRENT", "BZ=F"),
           ("DXY", "DX-Y.NYB"), ("US02Y", "FRED:DGS2"), ("US10Y", "^TNX"), ("US30Y", "^TYX")]
 

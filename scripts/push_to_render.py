@@ -183,6 +183,33 @@ step("noticias", noticias)
 bundle = {"files": files, "listings": listings, "history": history, "fx": fx, "live": live}
 body = json.dumps(bundle).encode()
 print(f"paquete: {len(files)} archivos, {len(listings)} listados, {len(history)} historiales, {len(body)//1024} KB")
-req = urllib.request.Request(URL, data=body, method="POST", headers={"Authorization": f"Bearer {TOK}", "Content-Type": "application/json", "User-Agent": "inside-push"})
-with urllib.request.urlopen(req, timeout=60) as r:
-    print("render:", r.status, r.read().decode()[:120])
+import time, urllib.error
+
+
+def enviar():
+    """POST con reintentos. Un servidor caido o reiniciandose (5xx, tiempo agotado, sin conexion) NO es un error del
+    runner: se reintenta con espera y, si sigue sin responder, se avisa con una anotacion y el proximo envio (5 min)
+    lo corrige solo, sin mandar un correo de fallo cada vez. Un 401/403 (token malo) si falla de verdad."""
+    espera = (15, 30, 60)
+    ultimo = ""
+    for intento in range(len(espera) + 1):
+        try:
+            req = urllib.request.Request(URL, data=body, method="POST", headers={"Authorization": f"Bearer {TOK}", "Content-Type": "application/json", "User-Agent": "inside-push"})
+            with urllib.request.urlopen(req, timeout=45) as r:
+                print("render:", r.status, r.read().decode()[:120])
+                return True
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 401, 403, 404, 413):
+                print(f"::error::Render rechazo el paquete (HTTP {e.code}): revisa INGEST_TOKEN / la ruta /ingest")
+                sys.exit(1)
+            ultimo = f"HTTP {e.code}"
+        except Exception as e:
+            ultimo = type(e).__name__
+        print(f"intento {intento + 1}/{len(espera) + 1} sin exito ({ultimo})")
+        if intento < len(espera):
+            time.sleep(espera[intento])
+    return False
+
+
+if not enviar():
+    print(f"::warning::Render no respondio (servidor caido o reiniciando); se reintenta en el siguiente ciclo")

@@ -21,7 +21,7 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 32
     permissions:
       contents: write
     steps:
@@ -47,13 +47,20 @@ jobs:
           fi
 
       - name: Generar radar
-        run: python fetch_stock_seeker.py
+        # Tope duro de 24 min: si Yahoo se cuelga, la corrida se corta sola (antes se quedaba 40 min y GitHub la cancelaba con correo de error).
+        # El script ya trae su propio plazo suave (18 min) y publica lo que alcanzo; si ni asi hay archivo, se conserva el radar anterior.
+        run: |
+          rm -rf output
+          timeout --signal=TERM --kill-after=30 1440 python fetch_stock_seeker.py || echo "::warning::El radar se corto por tiempo o tuvo un fallo; se revisa si hay archivo nuevo"
 
       - name: Publicar en rama data
         env:
           GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
         run: |
           set -e
+          if [ ! -s output/stock-seeker.json ] || ! python3 -c "import json;d=json.load(open('output/stock-seeker.json'));assert len(d['empresas'])>=400"; then
+            echo "::warning::No hay radar nuevo valido: se conserva el anterior en data-stock (la proxima corrida lo reintenta)"; exit 0
+          fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/jttyr/macro-indicators.git"

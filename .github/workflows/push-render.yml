@@ -31,6 +31,22 @@ jobs:
           INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
         run: python -W ignore scripts/push_to_render.py
 
+  # Precios de Stock Seeker precargados (dia, semana, mes, YTD y 1 año) para las empresas del radar y las mas grandes:
+  # la grafica abre al instante y no depende de que Render alcance a Yahoo. Nunca falla por la red (avisa y reintenta en 5 min).
+  precios:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: precargar precios de Stock Seeker
+        env:
+          RUNNER_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+        run: python -W ignore scripts/push_ss_prices.py
+
   # El GEX de la terminal arranca solo de 04:00 a 07:55 MX (10:00-13:55 UTC, lunes a viernes): este reloj
   # (cron-job.org + schedule, cada 5 min) es el fiable, asi que desde aqui se lanza gex-intraday, que antes de
   # las 08:00 MX solo genera datos (sin imagenes ni Discord). Si ya hubo una corrida hace menos de ~4 min

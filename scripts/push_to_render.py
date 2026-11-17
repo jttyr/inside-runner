@@ -54,6 +54,9 @@ def step(name, fn):
 
 
 step("gex", lambda: grab("gex-terminal", ["SPY", "QQQ", "DIA", "GLD"], 7))
+def gamma_hist():      # historial largo del balance de gamma (lo acumula el workflow de GEX)
+    files[f"{OWNER}/gex-terminal/gamma_history.json"] = gh_raw("gex-terminal", "latest/gamma_history.json")
+step("historial de gamma", gamma_hist)
 step("market-drivers", lambda: grab("market-drivers", ["ES", "NQ", "DJI", "XAUUSD"], 7))
 step("valuacion", lambda: grab("macro-valuation-data", ["OIL", "BRENT", "DXY", "US02Y", "US10Y", "US30Y"], 4))
 
@@ -85,11 +88,14 @@ def yahoo(sym):
 
 
 def fred(sid):
+    """FRED deja colgadas las peticiones que dicen ser un navegador sin parecerlo: nos identificamos como cliente propio.
+    Plazo corto y un reintento; si no responde, hist() cae al futuro del 2 años de Yahoo para no dejar la terminal sin dato."""
     since = (datetime.utcnow() - timedelta(days=400)).strftime("%Y-%m-%d")
     rows = None
-    for intento in range(2):                     # FRED a veces tarda; un reintento
+    for intento in range(2):
         try:
-            rows = get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}&cosd={since}", timeout=75).decode().strip().splitlines()[1:]
+            rows = get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}&cosd={since}",
+                       {"User-Agent": "inside-market-terminal/1.0", "Accept": "text/csv,*/*"}, timeout=20).decode().strip().splitlines()[1:]
             break
         except Exception:
             if intento:
@@ -107,7 +113,14 @@ def fred(sid):
 def hist():
     for label, sym in ASSETS:
         try:
-            pts = fred(sym[5:]) if sym.startswith("FRED:") else yahoo(sym)
+            if sym.startswith("FRED:"):
+                try:
+                    pts = fred(sym[5:])
+                except Exception as e:
+                    print("FRED sin respuesta, uso Yahoo 2YY=F:", type(e).__name__)
+                    pts = yahoo("2YY=F")
+            else:
+                pts = yahoo(sym)
             if len(pts) >= 30:
                 history[label] = {"dates": [d for d, _ in pts], "closes": [round(c, 4) for _, c in pts]}
         except Exception as e:

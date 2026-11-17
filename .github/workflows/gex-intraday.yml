@@ -221,6 +221,37 @@ jobs:
             ls -1 "latest/${ticker}"_*.png 2>/dev/null | sort -r | tail -n +5 | xargs -r rm -f
             ls -1 "latest/${ticker}"_*.json 2>/dev/null | sort -r | tail -n +8 | xargs -r rm -f
           done
+          # Historial largo del balance de gamma (gamma neta como % de toda la gamma del dia): los JSON diarios se podan a
+          # pocos dias, asi que aqui se va acumulando una fila por sesion y activo para que la terminal pueda comparar
+          # contra 7 y 22 sesiones. El dia de hoy se sobreescribe en cada corrida. Si algo falla, no detiene la publicacion.
+          python3 - <<'PY' || echo "::warning::no se pudo actualizar gamma_history.json"
+          import glob, json, re
+          p = "latest/gamma_history.json"
+          try:
+              H = json.load(open(p))
+          except Exception:
+              H = {}
+          for f in sorted(glob.glob("latest/*_20??-??-??.json")):
+              m = re.match(r"latest/([A-Za-z0-9.\-]+)_(\d{4}-\d{2}-\d{2})\.json$", f)
+              if not m:
+                  continue
+              try:
+                  j = json.load(open(f))
+              except Exception:
+                  continue
+              g = ((j.get("by_strike") or {}).get("gex_oi")) or []
+              tot = sum(abs(x) for x in g if x is not None)
+              net = j.get("net_gex")
+              if net is None or not tot:
+                  continue
+              t, d = m.groups()
+              rows = {r["date"]: r for r in H.get(t, [])}
+              # la neta se revalua al precio actual y el total es el de la foto del dia: el cociente se acota a +-100
+              rows[d] = {"date": d, "bal": round(max(-100.0, min(100.0, net / tot * 100)), 1), "net": net, "tot": tot}
+              H[t] = [rows[k] for k in sorted(rows)][-120:]
+          json.dump(H, open(p, "w"), separators=(",", ":"))
+          print("gamma_history:", {k: len(v) for k, v in H.items()})
+          PY
           git add -A
           git commit --quiet -m "actualizar imagenes $(date -u +%FT%TZ)" --allow-empty
           git push --quiet origin data --force

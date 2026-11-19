@@ -75,6 +75,10 @@ jobs:
           fi
           mkdir -p latest
           cp "$GITHUB_WORKSPACE/output/stock-seeker.json" latest/stock-seeker.json
+          # historial propio: una instantanea por dia (precio, consenso de BPA, pilares, categoria, version del modelo). Se acumula en la rama
+          # y es la unica base valida para validar el modelo sin look-ahead (macro-indicators/ss_validate.py). Nunca se reescribe hacia atras.
+          mkdir -p history
+          if [ -d "$GITHUB_WORKSPACE/output/history" ]; then cp "$GITHUB_WORKSPACE/output/history/"*.json history/ || true; fi
           git add -A
           git commit --quiet -m "actualizar stock seeker $(date -u +%FT%TZ)" --allow-empty
           git push --quiet origin data-stock --force

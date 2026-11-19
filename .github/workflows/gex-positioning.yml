@@ -1,0 +1,93 @@
+name: GEX Posicionamiento semanal y mensual
+
+# Calcula el posicionamiento acumulado de opciones (contratos abiertos por strike, semanal y mensual) y lo deja como
+# latest/POS_<TICKER>.json en la rama `data` de gex-terminal, que es de donde lo lee la vista ampliada del Insideprice.
+#
+# Es un workflow APARTE de los de GEX a proposito: no corre run_gex.py, no publica en Discord, no escribe en output/*.json
+# (ese patron lo recoge el publicador del GEX diario como <ticker>_<fecha>.json) y no toca ningun archivo existente de `data`.
+# Si falla, el posicionamiento queda con su ultimo valor y el GEX diario sigue exactamente igual.
+#
+# Disparador principal: cron-job.org -> repository_dispatch (run-gex-positioning), cada hora entre las 06:00 y las 14:00 MX en dias habiles.
+# `schedule` queda solo como respaldo. Comparte el grupo de concurrencia con el resto de los GEX para no pisarse al publicar en `data`.
+
+on:
+  repository_dispatch:
+    types: [run-gex-positioning]
+  workflow_dispatch:
+  schedule:
+    - cron: "20 12-20 * * 1-5"
+
+concurrency:
+  group: data-gex-terminal
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: jttyr/gex-terminal
+          token: ${{ secrets.RUNNER_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Calcular posicionamiento
+        run: python positioning.py pos_output
+
+      - name: Validar archivos generados
+        run: |
+          python3 - <<'PY'
+          import glob, json, sys
+          files = sorted(glob.glob("pos_output/POS_*.json"))
+          if not files:
+              print("::error::positioning.py no genero ningun POS_*.json"); sys.exit(1)
+          bad = 0
+          for f in files:
+              try:
+                  d = json.load(open(f))
+                  ok = isinstance(d, dict) and d.get("horizons") not in (None, {}, [])
+              except Exception as e:
+                  ok = False
+              if not ok:
+                  print(f"::warning::{f} invalido: no se publica (se conserva el anterior)")
+                  import os; os.remove(f); bad += 1
+          left = glob.glob("pos_output/POS_*.json")
+          print(f"validos: {len(left)}  descartados: {bad}")
+          sys.exit(0 if left else 1)
+          PY
+
+      - name: Publicar en rama data
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+        run: |
+          set -e
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/jttyr/gex-terminal.git"
+          rm -rf /tmp/data-branch
+          if git clone --quiet --branch data --single-branch "$REPO_URL" /tmp/data-branch 2>/dev/null; then
+            cd /tmp/data-branch
+          else
+            mkdir -p /tmp/data-branch && cd /tmp/data-branch
+            git init --quiet
+            git remote add origin "$REPO_URL"
+            git checkout --quiet --orphan data
+          fi
+          mkdir -p latest
+          cp "$GITHUB_WORKSPACE"/pos_output/POS_*.json latest/
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Sin cambios en el posicionamiento: no hay nada que publicar."
+            exit 0
+          fi
+          git commit --quiet -m "actualizar posicionamiento $(date -u +%FT%TZ)"
+          git push --quiet origin data --force

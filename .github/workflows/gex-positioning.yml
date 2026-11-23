@@ -40,6 +40,18 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
+      # Parte de lo ultimo publicado: si CBOE no responde (fuera de horario o bloqueo) se conservan las opciones y solo se actualiza la serie de precio
+      - name: Partir de lo ultimo publicado
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+        run: |
+          mkdir -p pos_output
+          rm -rf /tmp/prev
+          if git clone --quiet --depth 1 --branch data --single-branch "https://x-access-token:${GH_TOKEN}@github.com/jttyr/gex-terminal.git" /tmp/prev 2>/dev/null; then
+            cp /tmp/prev/latest/POS_*.json pos_output/ 2>/dev/null || true
+          fi
+          ls pos_output | head
+
       - name: Calcular posicionamiento
         run: python positioning.py pos_output
 

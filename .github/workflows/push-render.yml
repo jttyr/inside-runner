@@ -47,6 +47,22 @@ jobs:
           INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
         run: python -W ignore scripts/push_ss_prices.py
 
+  # Cotizaciones de TODO el universo del Stock Seeker (precio con pre y post mercado) cada ~5 min: la ficha, el potencial y el valor de mercado
+  # se mantienen al dia aunque el radar completo se genere pocas veces al dia. Nunca falla por la red (avisa y reintenta en 5 min).
+  cotizaciones:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: empujar cotizaciones de Stock Seeker
+        env:
+          RUNNER_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+        run: python -W ignore scripts/push_ss_quotes.py
+
   # El GEX de la terminal arranca solo de 04:00 a 07:55 MX (10:00-13:55 UTC, lunes a viernes): este reloj
   # (cron-job.org + schedule, cada 5 min) es el fiable, asi que desde aqui se lanza gex-intraday, que antes de
   # las 08:00 MX solo genera datos (sin imagenes ni Discord). Si ya hubo una corrida hace menos de ~4 min
